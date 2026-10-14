@@ -1,0 +1,8 @@
+opencv-python-headless>=4.9
+numpy>=1.26
+requests>=2.31
+playwright>=1.45
+ultralytics>=8.2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+anthropic>=0.40
