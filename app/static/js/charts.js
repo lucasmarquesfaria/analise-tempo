@@ -280,3 +280,135 @@ export function tableView(host, cols, rows) {
   host.replaceChildren(h('table', {},
     h('thead', {}, h('tr', {}, ...cols.map(c => h('th', { scope: 'col' }, c.h)))), body));
 }
+
+/* ═════════════ rosca: como o tempo se divide entre categorias ═════════════ */
+/** o = { data:[{key,label,value,color,text}], center:{big,small}, aria } */
+export function donutChart(host, o) {
+  host.replaceChildren();
+  const S = 240, c = S / 2, R = 108, r = 72;
+  const svg = sv('svg', { viewBox: `0 0 ${S} ${S}`, width: '100%', height: '100%', role: 'img', 'aria-label': o.aria }, host);
+  const total = o.data.reduce((s, d) => s + d.value, 0);
+  const tip = tooltip(host);
+  if (total <= 0) {
+    sv('circle', { cx: c, cy: c, r: (R + r) / 2, fill: 'none', stroke: 'var(--grid)', 'stroke-width': R - r }, svg);
+  } else {
+    let a0 = -Math.PI / 2;
+    const pt = (rad, a) => [c + rad * Math.cos(a), c + rad * Math.sin(a)];
+    for (const d of o.data) {
+      if (d.value <= 0) continue;
+      const frac = d.value / total, a1 = a0 + frac * 2 * Math.PI;
+      let el;
+      if (frac > 0.9999) {
+        el = sv('circle', { cx: c, cy: c, r: (R + r) / 2, fill: 'none', stroke: `var(${d.color})`, 'stroke-width': R - r }, svg);
+      } else {
+        const [x0, y0] = pt(R, a0), [x1, y1] = pt(R, a1), [x2, y2] = pt(r, a1), [x3, y3] = pt(r, a0), big = frac > 0.5 ? 1 : 0;
+        el = sv('path', { d: `M${x0} ${y0}A${R} ${R} 0 ${big} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${big} 0 ${x3} ${y3}Z`,
+          fill: `var(${d.color})`, stroke: 'var(--surface)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+      }
+      el.style.transition = 'opacity .12s';
+      const mid = (a0 + a1) / 2, [mx, my] = pt((R + r) / 2, mid);
+      const rect = () => host.getBoundingClientRect(), sc = () => rect().width / S;
+      el.addEventListener('pointerenter', () => {
+        svg.querySelectorAll('[data-s]').forEach(n => { n.style.opacity = n === el ? 1 : 0.45; });
+        tip.show(mx * sc(), host.clientWidth, my * sc() - 20, d.label, [{ color: d.color, value: d.text, label: `${Math.round(frac * 100)}%` }]);
+      });
+      el.addEventListener('pointerleave', () => { svg.querySelectorAll('[data-s]').forEach(n => { n.style.opacity = 1; }); tip.hide(); });
+      el.setAttribute('data-s', '');
+      a0 = a1;
+    }
+  }
+  if (o.center) {
+    sv('text', { class: 'dn-big', x: c, y: c + 4, 'text-anchor': 'middle' }, svg).textContent = o.center.big;
+    sv('text', { class: 'dn-small', x: c, y: c + 24, 'text-anchor': 'middle' }, svg).textContent = o.center.small;
+  }
+}
+
+/* ═════════════ colunas empilhadas por dia, com dias parciais sombreados ═════════════ */
+/** o = { cols:[{label,sub,segs:{key:v},partial,topLabel,tipTitle,extra:[{label,value}]}], cats:[{key,label,color}],
+ *        yMax, yStep, yFmt, valFmt, aria } */
+export function stackedColumns(host, o) {
+  host.replaceChildren();
+  const W = host.clientWidth, H = host.clientHeight;
+  if (W < 80 || H < 80) return;
+  const m = { l: 40, r: 8, t: 22, b: 46 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b, n = o.cols.length;
+  const band = pw / Math.max(1, n), bw = Math.max(6, Math.min(44, band * 0.62));
+  const floor = m.t + ph, Y = v => floor - Math.min(v, o.yMax) / o.yMax * ph;
+  const svg = sv('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': o.aria }, host);
+
+  o.cols.forEach((c, i) => {   // fundo cinza = dia com dados parciais
+    if (c.partial) sv('rect', { x: m.l + i * band, y: m.t, width: band, height: ph, fill: 'var(--sunken)' }, svg);
+  });
+  for (let v = 0; v <= o.yMax + 1e-9; v += o.yStep) {
+    sv('line', { class: v === 0 ? 'ax' : 'gl', x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v) }, svg);
+    sv('text', { x: m.l - 8, y: Y(v) + 4, 'text-anchor': 'end' }, svg).textContent = o.yFmt(v);
+  }
+  const tip = tooltip(host);
+  const gap = 2;
+  o.cols.forEach((c, i) => {
+    const x0 = m.l + i * band, cx = x0 + band / 2, x = cx - bw / 2;
+    let acc = 0;
+    const live = o.cats.filter(k => (c.segs[k.key] ?? 0) > 0);
+    live.forEach((k, j) => {
+      const v = c.segs[k.key], y1 = Y(acc + v), bot = Y(acc) - (j > 0 ? gap : 0), hgt = bot - y1;
+      acc += v;
+      if (hgt < 0.6) return;
+      const rr = j === live.length - 1 ? Math.min(4, hgt, bw / 2) : 0;   // só a ponta da coluna é arredondada
+      sv('path', { fill: `var(${k.color})`,
+        d: rr ? `M${x} ${bot}V${y1 + rr}a${rr} ${rr} 0 0 1 ${rr} ${-rr}H${x + bw - rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}V${bot}Z`
+              : `M${x} ${bot}V${y1}H${x + bw}V${bot}Z` }, svg);
+    });
+    if (c.topLabel) sv('text', { class: 'val', x: cx, y: Y(acc) - 6, 'text-anchor': 'middle' }, svg).textContent = c.topLabel;
+    sv('text', { x: cx, y: H - 24, 'text-anchor': 'middle' }, svg).textContent = c.label;
+    sv('text', { x: cx, y: H - 10, 'text-anchor': 'middle', class: 'sub' }, svg).textContent = c.sub;
+    const hit = sv('rect', { x: x0, y: m.t, width: band, height: ph + 30, fill: 'transparent' }, svg);
+    const show = () => tip.show(cx, W, m.t, c.tipTitle || c.label, [
+      ...o.cats.filter(k => (c.segs[k.key] ?? 0) > 0).map(k => ({ color: k.color, value: o.valFmt(c.segs[k.key]), label: k.label })),
+      ...(c.extra || []).map(e => ({ color: '--faint', value: e.value, label: e.label })),
+    ]);
+    hit.addEventListener('pointerenter', show);
+    hit.addEventListener('pointerdown', show);
+    hit.addEventListener('pointerleave', () => tip.hide());
+  });
+}
+
+/* ═════════════ radar: onde estão os pluviômetros e quanto choveu em cada um ═════════════ */
+/** o = { points:[{label,dist,ang,mm,tone,lines:[]}], center:{label,mm,tone}, maxKm, aria } */
+export function radarChart(host, o) {
+  host.replaceChildren();
+  const S = Math.min(host.clientWidth, 420);
+  if (S < 120) return;
+  const c = S / 2, R = c - 30, maxKm = o.maxKm;
+  const rad = d => R * Math.sqrt(Math.min(d, maxKm) / maxKm);
+  const svg = sv('svg', { viewBox: `0 0 ${S} ${S}`, width: S, height: S, role: 'img', 'aria-label': o.aria, style: 'display:block;margin:0 auto' }, host);
+  for (const km of [1, 5, maxKm]) {
+    sv('circle', { cx: c, cy: c, r: rad(km), fill: 'none', stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    sv('text', { class: 'halo', x: c + rad(km) * Math.SQRT1_2 + 3, y: c - rad(km) * Math.SQRT1_2 - 3 }, svg).textContent = `${km} km`;
+  }
+  sv('line', { x1: c, y1: c - R - 6, x2: c, y2: c + R + 6, stroke: 'var(--grid)' }, svg);
+  sv('line', { x1: c - R - 6, y1: c, x2: c + R + 6, y2: c, stroke: 'var(--grid)' }, svg);
+  sv('text', { class: 'halo', x: c, y: 12, 'text-anchor': 'middle' }, svg).textContent = 'N';
+
+  const toneFill = t => ({ good: 'var(--sunken)', info: 'var(--s1)', warn: 'var(--warn)', serious: 'var(--serious)', crit: 'var(--crit)' }[t] || 'var(--sunken)');
+  const tip = tooltip(host);
+  const dot = (x, y, r, tone, label, sub, lines, anchorLeft) => {
+    const g = sv('g', { tabindex: 0, role: 'img', 'aria-label': `${label}: ${lines.join(', ')}` }, svg);
+    sv('circle', { cx: x, cy: y, r, fill: toneFill(tone), stroke: tone === 'good' ? 'var(--axis)' : 'var(--surface)', 'stroke-width': 2 }, g);
+    const t = sv('text', { class: 'halo rl', x: x + (anchorLeft ? -(r + 6) : r + 6), y: y - 2, 'text-anchor': anchorLeft ? 'end' : 'start' }, g);
+    t.textContent = label;
+    sv('text', { class: 'halo rv', x: x + (anchorLeft ? -(r + 6) : r + 6), y: y + 12, 'text-anchor': anchorLeft ? 'end' : 'start' }, g).textContent = sub;
+    const show = () => tip.show(x, S, Math.max(4, y - 48), label, lines.map(l => ({ color: '--faint', value: l[0], label: l[1] })));
+    g.addEventListener('pointerenter', show); g.addEventListener('focus', show);
+    g.addEventListener('pointerleave', () => tip.hide()); g.addEventListener('blur', () => tip.hide());
+  };
+  for (const p of o.points) {
+    const r = rad(p.dist), x = c + r * Math.sin(p.ang), y = c - r * Math.cos(p.ang);
+    dot(x, y, 7 + Math.min(14, Math.sqrt(Math.max(0, p.mm)) * 3.2), p.tone, p.label, p.sub, p.lines, x > c);
+  }
+  // o centro: a câmera e a estação do rio
+  if (o.center) {
+    sv('circle', { cx: c, cy: c, r: 15, fill: 'none', stroke: 'var(--ink)', 'stroke-width': 1.5, 'stroke-dasharray': '3 3' }, svg);
+    dot(c, c, 8, o.center.tone, '', '', o.center.lines, false);
+    sv('text', { class: 'halo rl', x: c, y: c + 32, 'text-anchor': 'middle' }, svg).textContent = o.center.label;
+  }
+}

@@ -18,6 +18,7 @@ export const STATES = {
   atencao: { tone: 'warn', icon: 'alert', label: 'Atenção' },
   alerta: { tone: 'serious', icon: 'alert', label: 'Alerta' },
   critico: { tone: 'crit', icon: 'alert', label: 'Risco de transbordamento' },
+  suspeito: { tone: 'warn', icon: 'alert', label: 'Nível alto, sem chuva que o explique' },
   incerto: { tone: '', icon: 'info', label: 'Nível sem confirmação' },
   semdados: { tone: '', icon: 'info', label: 'Sem dados recentes' },
 };
@@ -54,6 +55,10 @@ export function assess(ctx) {
     id = 'semdados';
     parts.push('A estação do CEMADEN não enviou uma leitura recente do nível do rio.');
     reasons.push({ kind: 'warn', text: 'Sem leitura recente de nível na estação do CEMADEN.' });
+  } else if (hidro.poucas) {
+    id = 'incerto';
+    parts.push(`A estação do CEMADEN enviou só ${hidro.n} ${hidro.n === 1 ? 'leitura' : 'leituras'} recentes (última: ${m2(hidro.nivel_m)} m), pouco para confirmar o nível do rio.`);
+    reasons.push({ kind: 'warn', text: `Poucas leituras da estação (${hidro.n}): são necessárias pelo menos 3 para confirmar o nível.` });
   } else if (!hidro.estavel) {
     id = 'incerto';
     parts.push(`A estação do CEMADEN indica cerca de ${m2(hidro.nivel_m)} m (mediana da última hora), mas o sensor oscilou ${m2(hidro.variacao_m)} m nesse período. Por isso o nível não pode ser classificado com segurança.`);
@@ -83,6 +88,14 @@ export function assess(ctx) {
     if (rain.acc24 < 1) parts.push('Não houve chuva relevante nas últimas 24 h.');
     else parts.push(`Choveu ${num(rain.acc24, 1)} mm nas últimas 24 h (${rc.label.toLowerCase()})${(rain.acc1 ?? 0) > 0 ? `, sendo ${num(rain.acc1, 1)} mm na última hora` : ''}.`);
     reasons.push({ kind: heavy ? 'warn' : 'ok', text: `Chuva medida em 24 h: ${num(rain.acc24, 1)} mm (${rc.label.toLowerCase()}), pluviômetro ${rain.nome}.` });
+  }
+
+  // nível alto, mas sem chuva medida em 3 dias: pode ser eco falso do sensor ou chuva fora da área dos pluviômetros.
+  // Não gritamos "cheia" nem descartamos o risco: pedimos confirmação.
+  if ((id === 'alerta' || id === 'critico') && rain && (rain.acc72 ?? null) != null && rain.acc72 < 1) {
+    id = 'suspeito';
+    parts.push('Só que não há chuva medida nos últimos 3 dias que explique esse nível: pode ser erro do sensor ou chuva fora da área dos pluviômetros. Confirme pela câmera ou pelos avisos oficiais; não descarte o risco sem conferir.');
+    reasons.unshift({ kind: 'warn', text: 'Nível alto sem chuva medida nas últimas 72 h: possível erro do sensor ou chuva fora da área dos pluviômetros.' });
   }
 
   // 3) previsão

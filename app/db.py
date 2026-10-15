@@ -198,3 +198,9 @@ def cemaden_meta(k: str) -> str | None:
     with conn() as c:
         r = c.execute("SELECT v FROM cemaden_meta WHERE k=?", (k,)).fetchone()
     return r["v"] if r else None
+
+
+def cemaden_nivel_first(est: int) -> str | None:
+    with conn() as c:
+        r = c.execute("SELECT MIN(ts) AS ts FROM cemaden_nivel WHERE est=? AND nivel_m IS NOT NULL", (est,)).fetchone()
+    return r["ts"] if r else None

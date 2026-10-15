@@ -188,29 +188,47 @@ def _t(ts: str) -> datetime:
     return datetime.fromisoformat(ts)
 
 
+def _janela_lo(ts: list, i: int) -> int:
+    """Início da janela da mediana para a leitura i.
+
+    São as leituras da última hora; se a fonte estiver publicando de hora em hora e sobrarem
+    menos de 3, usa as 3 últimas desde que caibam em 3 h (senão fica a janela curta).
+    """
+    lo = i
+    while lo > 0 and ts[i] - ts[lo - 1] <= timedelta(minutes=JANELA_MIN):
+        lo -= 1
+    if i - lo + 1 >= 3:
+        return lo
+    lo3 = max(0, i - 2)
+    return lo3 if i - lo3 + 1 >= 3 and ts[i] - ts[lo3] <= timedelta(minutes=180) else lo
+
+
 def assess_nivel(rows: list[dict], est: dict, now: datetime) -> dict:
     """Mediana da última hora + estabilidade + classe pelas cotas da estação."""
     cotas = {"atencao": est.get("cota_atencao"), "alerta": est.get("cota_alerta"),
              "transbordamento": est.get("cota_transbordamento")}
-    out = {"cotas": cotas, "ultimo": None, "nivel_m": None, "variacao_m": None, "n": 0,
-           "estavel": False, "classe": None, "idade_min": None, "defasado": True}
+    out = {"cotas": cotas, "ultimo": None, "nivel_m": None, "variacao_m": None, "n": 0, "janela_min": None,
+           "estavel": False, "poucas": False, "classe": None, "idade_min": None, "defasado": True}
     if not rows:
         return out
-    last = rows[-1]
-    t_last = _t(last["ts"])
-    janela = [r["nivel_m"] for r in rows if t_last - _t(r["ts"]) <= timedelta(minutes=JANELA_MIN)]
-    idade = max(0, round((now - t_last).total_seconds() / 60))
-    out.update(ultimo={"ts": last["ts"], "nivel_m": last["nivel_m"]}, n=len(janela), idade_min=idade,
-               defasado=idade > DEFASADO_MIN)
-    if len(janela) < 3:
-        return out
+    ts = [_t(r["ts"]) for r in rows]
+    i = len(rows) - 1
+    lo = _janela_lo(ts, i)
+    janela = [r["nivel_m"] for r in rows[lo:]]
+    idade = max(0, round((now - ts[i]).total_seconds() / 60))
+    out.update(ultimo={"ts": rows[i]["ts"], "nivel_m": rows[i]["nivel_m"]}, n=len(janela), idade_min=idade,
+               defasado=idade > DEFASADO_MIN, janela_min=round((ts[i] - ts[lo]).total_seconds() / 60))
     med = statistics.median(janela)
+    out["nivel_m"] = round(med, 2)                      # sempre há um número para mostrar
+    if len(janela) < 3:                                 # poucas leituras: mostra, mas não classifica
+        out.update(poucas=True, variacao_m=round(max(janela) - min(janela), 2) if len(janela) > 1 else None)
+        return out
     var = _pct(janela, .9) - _pct(janela, .1)
     classe = "normal"
     for nome in ("atencao", "alerta", "transbordamento"):
         if cotas[nome] is not None and med >= cotas[nome]:
             classe = nome
-    out.update(nivel_m=round(med, 2), variacao_m=round(var, 2), estavel=var <= ESTAVEL_M, classe=classe)
+    out.update(variacao_m=round(var, 2), estavel=var <= ESTAVEL_M, classe=classe)
     return out
 
 
@@ -242,7 +260,7 @@ def summary() -> dict:
         rows = db.cemaden_chuva_since(e["id"], 96)
         ultimo = rows[-1]["ts"] if rows else None
         rotulo = e["nome"] if e["tipo"] != "hidro" else f"{e['nome']} (estação do rio)"
-        out["pluvios"].append({"id": e["id"], "nome": rotulo, "dist_km": e["dist_km"],
+        out["pluvios"].append({"id": e["id"], "nome": rotulo, "dist_km": e["dist_km"], "lat": e["lat"], "lon": e["lon"],
                                "acc": windows(rows, now), "ultimo": ultimo})
     out["pluvios"].sort(key=lambda p: p["dist_km"])
     return out
@@ -262,11 +280,8 @@ def series(hours: int, est: int | None = None) -> dict:
     if hidro:
         rows = db.cemaden_nivel_since(hidro["id"], hours + 1)
         ts = [_t(r["ts"]) for r in rows]
-        lo = 0
         for i, r in enumerate(rows):
-            while ts[i] - ts[lo] > timedelta(minutes=JANELA_MIN):
-                lo += 1
-            w = [x["nivel_m"] for x in rows[lo:i + 1]]
+            w = [x["nivel_m"] for x in rows[_janela_lo(ts, i):i + 1]]
             r["filtrado"] = round(statistics.median(w), 2) if len(w) >= 3 else None
         corte = datetime.now() - timedelta(hours=hours)
         out["nivel"] = [r for r in rows if _t(r["ts"]) >= corte]
@@ -279,4 +294,76 @@ def series(hours: int, est: int | None = None) -> dict:
         if rows and (escolhido or _t(rows[-1]["ts"]) >= datetime.now() - timedelta(hours=12)):
             out["chuva"], out["pluvio"], out["pluvio_id"] = rows, _rotulo(e), e["id"]
             break
+    return out
+
+
+# ───────────────────────── tempo em cada faixa ─────────────────────────
+CATEGORIAS = ("normal", "atencao", "alerta", "transbordamento", "incerto")
+GAP_MAX_MIN = 30   # sem leitura por mais que isso, o tempo conta como "sem dados"
+
+
+def _classificar(janela: list[float], cotas: dict) -> str:
+    """Faixa de uma leitura. Sensor instável (ou leituras de menos) vira 'incerto', nunca uma classe."""
+    if len(janela) < 3 or _pct(janela, .9) - _pct(janela, .1) > ESTAVEL_M:
+        return "incerto"
+    med = statistics.median(janela)
+    classe = "normal"
+    for nome, v in cotas.items():
+        if v is not None and med >= v:
+            classe = nome
+    return classe
+
+
+def zones(days: int) -> dict:
+    """Minutos em cada faixa por dia (horário local), com cobertura, para o painel."""
+    days = min(max(days, 1), 30)
+    now = datetime.now()
+    hidro = next((e for e in db.cemaden_estacoes() if e["tipo"] == "hidro"), None)
+    out = {"dias": [], "total": {k: 0.0 for k in CATEGORIAS}, "coletado_min": 0.0, "decorrido_min": 0.0,
+           "inicio": None, "categorias": list(CATEGORIAS)}
+    if not hidro:
+        return out
+    cotas = {"atencao": hidro["cota_atencao"], "alerta": hidro["cota_alerta"], "transbordamento": hidro["cota_transbordamento"]}
+    inicio_dia = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = db.cemaden_nivel_since(hidro["id"], days * 24 + 2)
+    ts = [_t(r["ts"]) for r in rows]
+    val = [r["nivel_m"] for r in rows]
+    por_dia: dict[str, dict] = {}
+    for i in range(len(rows)):
+        lo = _janela_lo(ts, i)
+        if ts[i] < inicio_dia:
+            continue
+        nxt = ts[i + 1] if i + 1 < len(rows) else now
+        # com leituras de hora em hora o "peso" de cada uma é maior que o padrão
+        peso = min(max((nxt - ts[i]).total_seconds() / 60, 0), 65 if (nxt - ts[i]) <= timedelta(minutes=65) else GAP_MAX_MIN)
+        dia = por_dia.setdefault(ts[i].date().isoformat(), {k: 0.0 for k in CATEGORIAS})
+        dia[_classificar(val[lo:i + 1], cotas)] += peso
+    for n in range(days):
+        d = (inicio_dia + timedelta(days=n)).date()
+        m = por_dia.get(d.isoformat(), {k: 0.0 for k in CATEGORIAS})
+        decorrido = 1440.0 if d < now.date() else (now - datetime.combine(d, datetime.min.time())).total_seconds() / 60
+        coletado = sum(m.values())
+        out["dias"].append({"data": d.isoformat(), **{k: round(m[k], 1) for k in CATEGORIAS},
+                            "coletado_min": round(coletado, 1), "decorrido_min": round(decorrido, 1),
+                            "cobertura": round(min(1.0, coletado / decorrido), 2) if decorrido else 0.0})
+        for k in CATEGORIAS:
+            out["total"][k] += m[k]
+        out["coletado_min"] += coletado
+        out["decorrido_min"] += decorrido
+    # chuva por dia (pluviômetro mais próximo com dado): serve para julgar se o nível faz sentido
+    ests = db.cemaden_estacoes()
+    for e in [x for x in ests if x["tipo"] != "hidro"] + [x for x in ests if x["tipo"] == "hidro"]:
+        chuva = db.cemaden_chuva_since(e["id"], days * 24 + 2)
+        if chuva and _t(chuva[-1]["ts"]) >= now - timedelta(hours=12):
+            soma: dict[str, float] = {}
+            for r in chuva:
+                soma[r["ts"][:10]] = soma.get(r["ts"][:10], 0.0) + r["mm"]
+            for d in out["dias"]:
+                d["chuva_mm"] = round(soma.get(d["data"], 0.0), 1)
+            out["pluvio"] = _rotulo(e)
+            out["chuva_total_mm"] = round(sum(d["chuva_mm"] for d in out["dias"]), 1)
+            break
+    out["total"] = {k: round(v, 1) for k, v in out["total"].items()}
+    out["coletado_min"], out["decorrido_min"] = round(out["coletado_min"], 1), round(out["decorrido_min"], 1)
+    out["inicio"] = db.cemaden_nivel_first(hidro["id"])
     return out

@@ -3,7 +3,7 @@
 import { $, $$, h, icon, num, m2, parseTs, fmtDateTime, fmtTime, fmtDate, fmtFull, cap, ago, agoMin, plural, store, toCsv, download } from './util.js';
 import { GLOSSARY, GLOSSARY_ORDER } from './glossary.js';
 import { assess, zoneOf, rainClass, RAIN_SCALE, STATES } from './situation.js';
-import { lineChart, columnChart, sparkline, legend, tableView } from './charts.js';
+import { lineChart, columnChart, sparkline, legend, tableView, donutChart, stackedColumns, radarChart } from './charts.js';
 
 /* ═════════════════════════ estado ═════════════════════════ */
 const S = {
@@ -15,6 +15,9 @@ const S = {
   cem: null,                         // resumo do CEMADEN (/api/cemaden)
   cemSeries: null,                   // série do período escolhido
   cem24: null,                       // série de 24 h (visão geral)
+  zones: null,                       // tempo em cada faixa, por dia
+  zdays: [3, 7, 14].includes(+store.get('rio-zdays', '7')) ? +store.get('rio-zdays', '7') : 7,
+  fetchedAt: Date.now(),
   live: null, latest: null,          // leitura ao vivo (SSE) e último registro do banco
   cam: 'wait',                       // 'wait' | 'on' | 'off'
   lastMsg: 0,
@@ -56,7 +59,7 @@ function computeSituation() {
   const g = gaugeNear();
   const ctx = {
     hidro: hid(), trend: trend1h(),
-    rain: g ? { nome: gaugeName(g), acc1: g.acc['1'], acc24: g.acc['24'] } : null,
+    rain: g ? { nome: gaugeName(g), acc1: g.acc['1'], acc24: g.acc['24'], acc72: g.acc['72'] } : null,
     forecast6h: d.chuva_prox_6h_mm ?? null,
     cam: { state: S.cam, level_pct: d.level_pct, conf: d.level_conf },
     alerts: S.alerts.map(a => ({ ts: parseTs(a.ts) })),
@@ -67,10 +70,14 @@ function computeSituation() {
 }
 
 /* ═════════════════════════ rede ═════════════════════════ */
-async function getJSON(u) {
-  const r = await fetch(u, { cache: 'no-store' });
-  if (!r.ok) throw new Error(`${u} → ${r.status}`);
-  return r.json();
+/** Toda requisição tem prazo: uma resposta que nunca chega não pode deixar o painel mudo para sempre. */
+async function getJSON(u, ms = 10000) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(u, { cache: 'no-store', signal: ctl.signal });
+    if (!r.ok) throw new Error(`${u} → ${r.status}`);
+    return await r.json();
+  } finally { clearTimeout(timer); }
 }
 const soft = p => p.catch(() => null);
 let loading = false;
@@ -82,16 +89,20 @@ async function loadAll() {
   const cemOn = S.cfg.cemaden;
   const est = S.gauge ? `&est=${S.gauge}` : '';
   try {
-    const [rows, alerts, cem, ser, ser24] = await Promise.all([
+    const [rows, alerts, cem, ser, ser24, zones, latest] = await Promise.all([
       getJSON(`/api/readings?hours=${S.hours}&points=360`),
       getJSON('/api/alerts'),
       cemOn ? soft(getJSON('/api/cemaden')) : null,
       cemOn ? soft(getJSON(`/api/cemaden/series?hours=${S.hours}${est}`)) : null,
       // a visão geral sempre mostra 24 h e o pluviômetro padrão, qualquer que seja a escolha em Chuva
       cemOn && (S.hours !== 24 || est) ? soft(getJSON('/api/cemaden/series?hours=24')) : null,
+      cemOn ? soft(getJSON(`/api/cemaden/zones?days=${S.zdays}`)) : null,
+      soft(getJSON('/api/latest')),
     ]);
     S.rows = rows; S.alerts = alerts; S.cem = cem; S.cemSeries = ser;
     S.cem24 = S.hours === 24 && !est ? ser : ser24;
+    S.zones = zones; S.fetchedAt = Date.now();
+    if (latest && latest.ts) S.latest = latest;
     if (S.gauge == null && ser?.pluvio_id != null) S.gauge = ser.pluvio_id;
     S.loaded = true; S.failed = false;
   } catch (e) {
@@ -112,7 +123,7 @@ const videoEl = h('figure', { class: 'video is-wait', id: 'video' },
   h('span', { class: 'vchip' }, h('span', { class: 'dot' }), h('span', { id: 'vchip-t' }, 'Conectando')),
   h('button', { class: 'vfs', type: 'button', 'aria-label': 'Tela cheia', title: 'Tela cheia' }, icon('max')),
   h('div', { class: 'vmsg', id: 'vmsg' }, 'Conectando à câmera…'));
-let es = null, camRetry = 0, paintTimer = 0;
+let liveTimer = 0, frameTimer = 0;
 
 function setCamState(st) {
   const first = S.cam !== st;
@@ -128,47 +139,62 @@ function setCamState(st) {
   pill.querySelector('.dot').hidden = st === 'off';
   if (st === 'off') pill.prepend(icon('xcircle', 'sm'));
   $('#live-text').textContent = on ? 'ao vivo' : st === 'off' ? 'sem sinal' : 'conectando';
+  renderChrome();
   if (first && S.loaded) { renderSituation(); renderKpis(); renderSources(); }
 }
 
-function connectLive() {
-  if (!es) {
-    es = new EventSource('/api/live');
-    es.onmessage = e => {
-      let d; try { d = JSON.parse(e.data); } catch { return; }
-      S.live = d; S.lastMsg = performance.now();
-      const was = S.cam;
-      setCamState('on');
-      if (was !== 'on') renderLiveParts();
-      else if (!paintTimer) paintTimer = setTimeout(() => { paintTimer = 0; renderLiveParts(); }, 400);
-    };
-    es.addEventListener('stale', () => setCamState('off'));
-    es.onerror = () => { if (S.cam === 'on') setCamState('off'); };   // o EventSource reconecta sozinho
-  }
-}
+/*
+ * Dados e vídeo ao vivo SEM conexões permanentes.
+ * Cada aba abria 2 conexões longas (SSE + MJPEG); o navegador só permite 6 por endereço, então
+ * 3 abas bastavam para a 4ª nem carregar. Agora tudo são requisições curtas, que liberam a
+ * conexão na hora: abas ilimitadas, e aba em segundo plano não consome nada.
+ */
 const wantsVideo = () => S.view === 'overview' || S.view === 'camera';
+
+async function pollLive() {
+  clearTimeout(liveTimer);
+  if (!document.hidden) {
+    try {
+      const d = await getJSON('/api/live.json');
+      if (d.ts && !d._stale) {
+        S.live = d; S.lastMsg = performance.now();
+        const was = S.cam;
+        setCamState('on');
+        renderLiveParts();
+      } else setCamState('off');
+    } catch { if (S.cam === 'on') setCamState('off'); }
+  }
+  liveTimer = setTimeout(pollLive, wantsVideo() ? 1000 : 4000);
+}
+
+/** Próximo quadro: baixa a imagem fora da tela e só troca quando chegou (sem piscar). */
+function pumpFrame() {
+  clearTimeout(frameTimer);
+  if (!wantsVideo() || document.hidden || !videoEl.isConnected) return;
+  const t0 = performance.now(), im = new Image();
+  im.onload = () => {
+    camImg.src = im.src;
+    frameTimer = setTimeout(pumpFrame, Math.max(0, 320 - (performance.now() - t0)));
+  };
+  im.onerror = () => { frameTimer = setTimeout(pumpFrame, 2000); };
+  im.src = '/snap/latest.jpg?t=' + Date.now();
+}
+
 function syncVideo() {
   const slot = S.view === 'overview' ? $('#slot-overview') : S.view === 'camera' ? $('#slot-camera') : null;
   if (slot) {
     if (videoEl.parentElement !== slot) slot.append(videoEl);
-    if (!camImg.getAttribute('src') && !document.hidden) camImg.src = '/live.mjpg?t=' + Date.now();
+    pumpFrame();
   } else {                         // fora das seções com vídeo, não gasta banda
     videoEl.remove();
-    camImg.removeAttribute('src');
+    clearTimeout(frameTimer);
   }
 }
-camImg.addEventListener('load', () => { camRetry = 0; });
-camImg.addEventListener('error', () => {   // <img> de MJPEG não reconecta sozinho
-  if (document.hidden || !camImg.getAttribute('src')) return;
-  setTimeout(() => { if (!document.hidden && wantsVideo()) camImg.src = '/live.mjpg?t=' + Date.now(); }, Math.min(10000, 1500 * ++camRetry));
-});
+const connectLive = () => pollLive();
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { es?.close(); es = null; camImg.removeAttribute('src'); }
-  else { connectLive(); syncVideo(); loadAll(); }
+  if (document.hidden) { clearTimeout(liveTimer); clearTimeout(frameTimer); }
+  else { pollLive(); syncVideo(); loadAll(); }
 });
-setInterval(() => {                // vigia: nenhuma leitura há 10 s → sem sinal
-  if (es && S.cam === 'on' && performance.now() - S.lastMsg > 10000) setCamState('off');
-}, 2000);
 $('.vfs', videoEl).addEventListener('click', async () => {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
@@ -203,6 +229,10 @@ function zonesBar(cotas, nivel, { big = false, unsure = false } = {}) {
     h('div', { class: 'zones-lbl' }, ...lbl));
 }
 
+function deltaNode(dir, tone, bold, rest) {
+  const arrow = dir > 0 ? '▲' : dir < 0 ? '▼' : '=';
+  return h('span', { class: 'delta', 'data-tone': tone || '' }, h('span', { class: 'arr', 'aria-hidden': 'true' }, arrow), h('span', {}, h('b', {}, bold), ' ', rest));
+}
 function trendNode(delta) {
   if (delta == null) return null;
   const up = delta > 0.04, down = delta < -0.04;
@@ -211,13 +241,42 @@ function trendNode(delta) {
 }
 
 /* ═════════════════════════ cabeçalho ═════════════════════════ */
+/** "(há 12 min)" / "(em 2 min)" — passado ou futuro, sempre em minutos. */
+function whenText(ms, now = Date.now()) {
+  const m = Math.round((ms - now) / 60000);
+  if (m >= 1) return `em ${m} min`;
+  if (m <= -1) return ago(ms, now);
+  return ms >= now ? 'em instantes' : 'agora há pouco';
+}
+const strong = t => h('b', {}, t);
+
 function renderChrome() {
-  const x = hid(), el = $('#fresh');
-  let text = 'Sem dados do CEMADEN';
-  if (x?.ultimo) text = `Nível medido ${agoMin(x.idade_min)}`;
-  else if (S.cem?.atualizado) text = 'CEMADEN conectado';
-  el.querySelector('span').textContent = text;
-  el.title = x?.ultimo ? `Última medição da estação: ${fmtFull.format(parseTs(x.ultimo.ts))}` : '';
+  const now = Date.now(), x = hid();
+  const m1 = $('#meta-1'), m2e = $('#meta-2'), m3 = $('#meta-3');
+  m1.replaceChildren(`Monitor de cheia do Rio Caratinga · atualizado `, strong(fmtDateTime.format(S.fetchedAt).replace(',', '')), ' (Brasília)');
+  // CEMADEN: última medição da estação e próxima coleta do painel
+  if (S.cfg.cemaden) {
+    const parts = ['Nível e chuva (CEMADEN): '];
+    if (x?.ultimo) {
+      const last = parseTs(x.ultimo.ts);
+      parts.push('última medição ', strong(fmtTime.format(last)), ` (${ago(last, now)})`);
+    } else parts.push('sem medição recente');
+    if (S.cem?.atualizado) {
+      const next = parseTs(S.cem.atualizado) + (S.cfg.cemaden_interval_seconds || 300) * 1000;
+      parts.push(' · próxima coleta ', strong(fmtTime.format(next)), ` (${whenText(next, now)})`);
+    }
+    m2e.replaceChildren(...parts);
+  } else m2e.replaceChildren();
+  // câmera: estado e gravação do histórico
+  const d = S.latest, iv = (S.cfg.interval_seconds || 300) * 1000;
+  const state = S.cam === 'on' ? 'ao vivo' : S.cam === 'off' ? 'sem sinal' : 'conectando';
+  const parts = ['Câmera: ', strong(state)];
+  if (d?.ts) {
+    const last = parseTs(d.ts);
+    parts.push(' · última gravação ', strong(fmtTime.format(last)), ` (${ago(last, now)})`);
+    if (S.cam === 'on') { const next = last + iv; parts.push(' · próxima ', strong(fmtTime.format(next)), ` (${whenText(next, now)})`); }
+  }
+  m3.replaceChildren(...parts);
 }
 
 /* ═════════════════════════ visão geral ═════════════════════════ */
@@ -245,13 +304,17 @@ function renderKpis() {
   if (x && x.nivel_m != null) {
     lvl.replaceChildren(m2(x.nivel_m), h('small', {}, 'm'));
     lvl.classList.toggle('dim', !x.estavel || x.defasado);
-    const st = !x.estavel ? { tone: '', ico: 'info', label: 'Sensor instável' }
+    const st = x.poucas ? { tone: '', ico: 'info', label: 'Poucas leituras' } : !x.estavel ? { tone: '', ico: 'info', label: 'Sensor instável' }
+      : S.sit?.id === 'suspeito' ? { tone: 'warn', ico: 'alert', label: `${ZONE_NAMES[x.classe]} (a confirmar)` }
       : { tone: ZONE_TONE[x.classe], ico: x.classe === 'normal' ? 'check' : 'alert', label: ZONE_NAMES[x.classe] };
     $('#k-level-badge').append(badge(st.tone, st.ico, st.label));
-    $('#k-level-sub').textContent = `Mediana da última hora · estação ${x.nome}`;
+    $('#k-level-sub').textContent = x.poucas ? `Última leitura da estação ${x.nome}` : `Mediana de ${x.janela_min && x.janela_min > 65 ? Math.round(x.janela_min / 60) + ' h' : '1 h'} · estação ${x.nome}`;
     zb.append(zonesBar(x.cotas, x.nivel_m, { unsure: !x.estavel }));
-    const t = trendNode(x.estavel ? trend1h()?.delta1h : null);
-    $('#k-level-foot').append(...[t, h('span', {}, `Medido ${agoMin(x.idade_min)}`)].filter(Boolean));
+    const dl = x.estavel ? trend1h()?.delta1h : null;
+    $('#k-level-foot').append(dl == null
+      ? h('span', {}, x.estavel ? 'Sem variação medida na última hora' : 'Variação não calculada: sensor instável')
+      : Math.abs(dl) < 0.04 ? deltaNode(0, '', 'Sem variação', 'vs. 1 h antes')
+      : deltaNode(dl, dl > 0 ? 'crit' : 'good', `${dl > 0 ? '+' : '−'}${m2(Math.abs(dl))} m`, 'vs. 1 h antes'));
   } else {
     lvl.replaceChildren('—'); lvl.classList.add('dim');
     $('#k-level-badge').append(badge('', 'info', 'Sem leitura'));
@@ -265,6 +328,10 @@ function renderKpis() {
     rv.replaceChildren(num(g.acc['24'], 1), h('small', {}, 'mm'));
     $('#k-rain-badge').replaceChildren(badge(RAIN_TONE[rc.id], RAIN_ICON[rc.id], rc.label));
     $('#k-rain-sub').textContent = `${gaugeName(g)} · última hora: ${num(g.acc['1'], 1)} mm`;
+    const a24 = g.acc['24'], a48 = g.acc['48'];
+    const prev = a48 != null && a24 != null ? +(a48 - a24).toFixed(1) : null;
+    $('#k-rain-foot').replaceChildren(prev == null ? h('span', {}, 'Sem comparação com o dia anterior')
+      : deltaNode(Math.sign(+(a24 - prev).toFixed(1)), '', `${a24 - prev > 0 ? '+' : a24 - prev < 0 ? '−' : ''}${num(Math.abs(a24 - prev), 1)} mm`, `vs. 24 h anteriores (${num(prev, 1)})`));
   } else {
     rv.replaceChildren('—'); $('#k-rain-badge').replaceChildren(badge('', 'info', 'Sem dado')); $('#k-rain-sub').textContent = 'Pluviômetros sem leitura recente.';
   }
@@ -276,7 +343,10 @@ function renderKpis() {
   const on = S.cam === 'on';
   $('#k-cam-badge').replaceChildren(on ? badge('good', 'check', 'Ao vivo') : S.cam === 'off' ? badge('crit', 'xcircle', 'Sem sinal') : badge('', 'info', 'Conectando'));
   const ppl = d.pessoas, veh = vehTotal(d);
-  $('#k-cam-sub').textContent = on && S.cfg.yolo ? `${num(ppl, 0)} ${plural(ppl, 'pessoa', 'pessoas')} · ${num(veh, 0)} ${plural(veh, 'veículo', 'veículos')} na cena`
+  const bigCam = $('#k-cam-big');
+  if (on && S.cfg.yolo) bigCam.replaceChildren(num(ppl, 0), h('small', {}, plural(ppl, 'pessoa', 'pessoas')));
+  else bigCam.replaceChildren('—');
+  $('#k-cam-sub').textContent = on && S.cfg.yolo ? `${num(veh, 0)} ${plural(veh, 'veículo', 'veículos')} na cena`
     : on ? 'Imagem ao vivo.' : d.ts ? `Última imagem registrada ${agoMin((Date.now() - parseTs(d.ts)) / 60000)}.` : 'Sem imagem recente.';
   const conf = d.level_conf;
   $('#k-cam-foot').textContent = d.level_pct != null
@@ -307,7 +377,7 @@ function sources() {
   return [
     { id: 'nivel', ico: 'waves', name: 'Nível do rio', by: 'CEMADEN · estação hidrológica',
       ...(!x || x.nivel_m == null || x.defasado ? { tone: 'crit', ico2: 'xcircle', label: 'Sem leitura' }
-        : !x.estavel ? { tone: 'warn', ico2: 'alert', label: 'Sensor instável' } : { tone: 'good', ico2: 'check', label: 'Estável' }),
+        : x.poucas ? { tone: 'warn', ico2: 'alert', label: 'Poucas leituras' } : !x.estavel ? { tone: 'warn', ico2: 'alert', label: 'Sensor instável' } : { tone: 'good', ico2: 'check', label: 'Leituras estáveis' }),
       age: x?.ultimo ? agoMin(x.idade_min) : '—',
       what: 'Altura da água, em metros, medida por sensor na própria estação do rio, com as cotas oficiais.',
       freq: 'Leitura a cada 10 a 30 minutos.',
@@ -340,6 +410,108 @@ function renderSources() {
     h('small', {}, s.age ? `${s.by} · ${s.age}` : s.by))));
 }
 
+/* ═════════════ tempo em cada faixa (rosca + colunas por dia) ═════════════ */
+const ZCATS = [
+  { key: 'normal', label: 'Normal', color: '--good' },
+  { key: 'atencao', label: 'Atenção', color: '--warn' },
+  { key: 'alerta', label: 'Alerta', color: '--serious' },
+  { key: 'transbordamento', label: 'Transbordamento', color: '--crit' },
+  { key: 'incerto', label: 'Sensor instável', color: '--unsure' },
+];
+const NODATA = { key: 'semdados', label: 'Sem leitura', color: '--nodata' };
+const hm = min => {
+  const t = Math.round(min), hh = Math.floor(t / 60), mm = t % 60;
+  return hh ? (mm ? `${hh} h ${String(mm).padStart(2, '0')} min` : `${hh} h`) : `${mm} min`;
+};
+const WD = new Intl.DateTimeFormat('pt-BR', { weekday: 'short' });
+
+function renderZones() {
+  const z = S.zones, donut = $('#zn-donut'), leg = $('#zn-legend');
+  if (!S.cfg.cemaden || !z || !z.dias?.length) {
+    donut.replaceChildren(h('div', { class: 'chart-empty' }, h('span', {}, 'Aguardando dados do CEMADEN…')));
+    leg.replaceChildren(); $('#zn-bars').replaceChildren(); return;
+  }
+  const hidden = k => !!S.hidden['z:' + k];
+  const total = z.decorrido_min, none = Math.max(0, total - z.coletado_min);
+  const rows = [...ZCATS.map(c => ({ ...c, value: z.total[c.key] || 0 })), { ...NODATA, value: none }];
+  const shown = rows.filter(r => !hidden(r.key));
+  const stable = ZCATS.slice(0, 4).reduce((s, c) => s + (z.total[c.key] || 0), 0);
+  const base = shown.reduce((s, r) => s + r.value, 0) || 1;
+
+  $('#zn-sub').textContent = `Tempo em cada faixa de cota nos últimos ${S.zdays} dias, pelas leituras da estação ${S.cem?.hidro?.nome || ''}.`.replace(' .', '.');
+  donutChart(donut, {
+    data: shown.map(r => ({ key: r.key, label: r.label, value: r.value, color: r.color, text: hm(r.value) })),
+    center: { big: `${Math.round(stable / (total || 1) * 100)}%`, small: 'com leitura confiável' },
+    aria: `Tempo em cada faixa nos últimos ${S.zdays} dias: ` + rows.filter(r => r.value > 0).map(r => `${r.label} ${hm(r.value)}`).join(', '),
+  });
+  leg.replaceChildren(...rows.map(r => h('tr', { class: r.value <= 0 ? 'off' : '' },
+    h('td', {}, h('span', { class: 'nm' }, h('i', { class: 'sw', style: `background:var(${r.color})` }), r.label)),
+    h('td', { class: 'n' }, hm(r.value)),
+    h('td', { class: 'p' }, `${Math.round(r.value / (total || 1) * 100)}%`))),
+    h('tr', { class: 'tot' }, h('td', {}, 'Total'), h('td', { class: 'n' }, hm(total)), h('td', {})));
+
+  // aviso de leitura: coleta parcial e altas sem chuva
+  const notes = [];
+  const first = z.inicio ? parseTs(z.inicio) : null;
+  if (first && z.dias.some(d => d.cobertura < 0.9)) notes.push(h('span', {}, 'Coleta guardada desde ', h('b', {}, fmtDate.format(first)), '; antes disso o painel não tem dados.'));
+  const hi = (z.total.alerta || 0) + (z.total.transbordamento || 0);
+  if (hi > 0 && z.chuva_total_mm != null && z.chuva_total_mm < 1)
+    notes.push(h('span', {}, ' Não houve chuva relevante no período: leituras altas e estáveis podem ser eco do sensor, não cheia.'));
+  $('#zn-note').replaceChildren(...notes);
+
+  // colunas empilhadas por dia
+  const cats = ZCATS.filter(c => !hidden(c.key));
+  const cols = z.dias.map(d => {
+    const dt = new Date(d.data + 'T12:00:00');
+    const segs = Object.fromEntries(cats.map(c => [c.key, (d[c.key] || 0) / 60]));
+    const extra = [];
+    if (d.chuva_mm != null) extra.push({ label: 'Chuva no dia', value: `${num(d.chuva_mm, 1)} mm` });
+    extra.push({ label: 'Cobertura do dia', value: `${Math.round(d.cobertura * 100)}%` });
+    return { label: fmtDate.format(dt), sub: WD.format(dt).replace('.', ''), segs, partial: d.cobertura < 0.9,
+      topLabel: d.coletado_min > 0 ? `${Math.round(d.coletado_min / 60)} h` : '', tipTitle: `${fmtDate.format(dt)} · ${WD.format(dt).replace('.', '')}`, extra };
+  });
+  stackedColumns($('#zn-bars'), { cols, cats, yMax: 24, yStep: 6, yFmt: v => `${v} h`, valFmt: v => hm(v * 60),
+    aria: `Horas em cada faixa por dia, últimos ${S.zdays} dias.` });
+  legend($('#zn-leg'), ZCATS.map(c => ({ key: 'z:' + c.key, label: c.label, color: c.color })), S.hidden, renderZones);
+  $('#zn-leg').classList.add('sq');
+  const partial = z.dias.filter(d => d.cobertura < 0.9).length;
+  $('#zn-bars-note').textContent = partial
+    ? `Dias com fundo cinza têm dados parciais (${partial} no período): a coleta começou em ${first ? fmtDate.format(first) : '—'} ou houve falhas de leitura. O número no topo é o total de horas com leitura.`
+    : 'Todos os dias do período têm leitura quase completa.';
+  // tabela equivalente
+  const head = h('thead', {}, h('tr', {}, ...['Dia', ...ZCATS.map(c => c.label), 'Cobertura', 'Chuva'].map(t => h('th', { scope: 'col' }, t))));
+  $('#zn-table').replaceChildren(head, h('tbody', {}, ...[...z.dias].reverse().map(d => h('tr', {},
+    h('td', {}, fmtDate.format(new Date(d.data + 'T12:00:00'))),
+    ...ZCATS.map(c => h('td', {}, hm(d[c.key] || 0))),
+    h('td', {}, `${Math.round(d.cobertura * 100)}%`),
+    h('td', {}, d.chuva_mm != null ? `${num(d.chuva_mm, 1)} mm` : '—')))));
+}
+
+/* ═════════════ radar dos pluviômetros ═════════════ */
+const bearing = (lat0, lon0, lat, lon) => Math.atan2((lon - lon0) * Math.cos(lat0 * Math.PI / 180) * 111.32, (lat - lat0) * 110.57);
+function renderRadar() {
+  const host = $('#radar'), ps = S.cem?.pluvios || [];
+  if (!S.cfg.cemaden || !ps.length) {
+    host.replaceChildren(empty('info', 'Pluviômetros indisponíveis', 'Os dados do CEMADEN ainda não foram carregados.'));
+    $('#radar-note').textContent = '';
+    return;
+  }
+  const lat0 = S.cfg.lat, lon0 = S.cfg.lon, pts = [];
+  let center = null;
+  for (const p of ps) {
+    const mm = p.acc?.['24'], rc = mm != null ? rainClass(mm) : null, tone = rc ? RAIN_TONE[rc.id] : 'good';
+    const lines = [[mm == null ? '—' : `${num(mm, 1)} mm`, 'Últimas 24 h'], [p.acc?.['1'] == null ? '—' : `${num(p.acc['1'], 1)} mm`, 'Última hora'],
+                   [`${num(p.dist_km, 1)} km`, 'Distância da câmera'], [rc ? rc.label : '—', 'Classificação']];
+    if (p.dist_km < 0.3) { center = { label: 'Câmera e estação do rio', tone, lines }; continue; }
+    pts.push({ label: gaugeName(p).slice(0, 15), dist: p.dist_km, ang: bearing(lat0, lon0, p.lat, p.lon), mm: mm ?? 0, tone,
+               sub: mm == null ? '—' : `${num(mm, 1)} mm`, lines });
+  }
+  const far = Math.max(...ps.map(p => p.dist_km));
+  radarChart(host, { points: pts, center, maxKm: Math.max(20, Math.ceil(far * 1.1)),
+    aria: 'Posição dos pluviômetros em relação à câmera e chuva de cada um em 24 horas: ' + ps.map(p => `${p.nome}, ${num(p.dist_km, 1)} km, ${num(p.acc?.['24'], 1)} mm`).join('; ') });
+  $('#radar-note').textContent = 'Tamanho e cor do círculo mostram a chuva em 24 h (cinza = sem chuva). As distâncias usam escala de raiz quadrada para dar espaço aos pluviômetros mais próximos.';
+}
+
 function renderOverviewCharts() {
   const cs = S.cem24;
   const nivel = (cs?.nivel || []).map(r => ({ t: parseTs(r.ts), nivel_m: r.nivel_m, filtrado: r.filtrado }));
@@ -359,6 +531,7 @@ function renderOverviewCharts() {
     bands: zoneBands(c).map(b => ({ ...b, label: null })), thresholds: zoneLines(c) });
   const wet = chuva.some(r => r.mm > 0);
   rn.classList.toggle('flat', !wet);
+  lv.classList.toggle('fill', !wet);
   if (!wet) {   // sem chuva: uma linha basta, não um gráfico vazio
     rn.replaceChildren(h('div', { class: 'flat-msg' }, icon('check', 'sm'), 'Sem chuva medida nas últimas 24 horas'));
     return;
@@ -632,7 +805,7 @@ const HASH = Object.fromEntries(Object.entries(ROUTES).map(([k, v]) => [v, k]));
 const RENDER = { overview: renderOverview, rio: renderRio, chuva: renderChuva, camera: renderCamera, dados: renderDados };
 
 function renderOverview() {
-  renderSituation(); renderKpis(); renderSources(); renderOverviewCharts();
+  renderSituation(); renderKpis(); renderSources(); renderOverviewCharts(); renderZones(); renderRadar();
   $('#ov-events').replaceChildren(eventsNode(4));
 }
 function renderView(id) { if (S.loaded || id === 'dados') RENDER[id]?.(); }
@@ -649,21 +822,22 @@ function route() {
   const id = ROUTES[key] || 'overview';
   S.view = id;
   $$('.view').forEach(v => { v.hidden = v.id !== 'v-' + id; });
-  $$('.nav a').forEach(a => {
+  $$('.pills a').forEach(a => {
     if (a.dataset.view === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   const sec = $('#v-' + id);
-  document.title = `${sec.dataset.title} · Rio Caratinga`;
-  $('#bar-title').textContent = sec.dataset.title;
+  document.title = `Rio Caratinga · ${sec.dataset.title}`;
+  $('#h1-view').textContent = sec.dataset.title;
   syncVideo();
   renderView(id);
   window.scrollTo(0, 0);
-  if (route.first) sec.querySelector('h1')?.focus({ preventScroll: true }); else route.first = true;
+  if (route.first) $('#page-title').focus({ preventScroll: true }); else route.first = true;
 }
 window.addEventListener('hashchange', route);
 
 /* ═════════════════════════ filtros, tema, ciclo de vida ═════════════════════════ */
 function syncRanges() {
+  const zd = $('#zn-days'); if (zd) zd.value = String(S.zdays);
   $$('[data-range] input').forEach(i => { i.checked = +i.value === S.hours; });
 }
 document.addEventListener('change', e => {
@@ -671,6 +845,10 @@ document.addEventListener('change', e => {
     S.hours = +e.target.value;
     store.set('rio-range', String(S.hours));
     syncRanges();
+    loadAll();
+  } else if (e.target.id === 'zn-days') {
+    S.zdays = +e.target.value;
+    store.set('rio-zdays', String(S.zdays));
     loadAll();
   } else if (e.target.id === 'gauge') {
     S.gauge = +e.target.value;
@@ -712,4 +890,4 @@ new ResizeObserver(entries => {
   renderAll();
 })();
 setInterval(loadAll, 30000);
-setInterval(() => { if (S.loaded) { renderChrome(); if (S.view === 'overview') { renderSituation(); renderKpis(); renderSources(); } } }, 30000);   // "há X min" continua andando
+setInterval(() => { if (S.loaded) { renderChrome(); if (S.view === 'overview') { renderSituation(); renderKpis(); renderSources(); } } }, 10000);   // "há X min" e a contagem regressiva andam sozinhos

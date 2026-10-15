@@ -9,6 +9,7 @@ export const GLOSSARY = {
       '1. O nível do rio na estação do CEMADEN, comparado às cotas da própria estação: normal, atenção, alerta ou transbordamento.',
       '2. Se o sensor da estação estiver oscilando, o nível não é classificado: o estado vira "Nível sem confirmação" e o painel diz por quê.',
       '3. Chuva forte (medida ou prevista) com o sensor instável eleva o estado para "Atenção", porque não dá para descartar a subida.',
+      '4. Nível em alerta ou transbordamento sem nenhuma chuva medida em 3 dias não é tratado como cheia confirmada: vira "Nível alto, sem chuva que o explique", para você conferir pela câmera ou pelos avisos oficiais.',
       'A câmera e os alertas entram no texto de apoio, mas não mudam o estado sozinhos. Este painel é uma ferramenta de apoio e não substitui os avisos oficiais da Defesa Civil e do CEMADEN.',
     ],
   },

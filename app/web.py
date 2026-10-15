@@ -1,5 +1,6 @@
 """Painel: última imagem, gráficos e alertas."""
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -55,6 +56,8 @@ def api_config():
         "vision": bool(config.ANTHROPIC_API_KEY),
         "telegram": bool(config.TELEGRAM_TOKEN and config.TELEGRAM_CHAT_ID),
         "cemaden": config.CEMADEN_ENABLED,
+        "cemaden_interval_seconds": config.CEMADEN_INTERVAL_SECONDS,
+        "lat": config.LAT, "lon": config.LON,
     }
 
 
@@ -62,6 +65,12 @@ def api_config():
 def api_cemaden():
     """Nível do rio (estação hidrológica) e chuva dos pluviômetros do CEMADEN, já filtrados."""
     return cemaden.summary()
+
+
+@app.get("/api/cemaden/zones")
+def api_cemaden_zones(days: int = 7):
+    """Tempo (minutos) em cada faixa de cota, por dia e no total."""
+    return cemaden.zones(days)
 
 
 @app.get("/api/cemaden/series")
@@ -109,6 +118,23 @@ async def live_video(request: Request):
 
     return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
                              headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/live.json")
+def live_snapshot():
+    """Última leitura ao vivo em uma requisição curta.
+
+    O painel usa isto em vez de SSE/MJPEG: conexões permanentes esgotam o limite de 6 por site do
+    navegador e, com algumas abas abertas, travam tudo. `_age` é a idade do dado, em segundos.
+    """
+    try:
+        st = config.LIVE_FILE.stat()
+        d = json.loads(config.LIVE_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+    d["_age"] = round(max(0.0, time.time() - st.st_mtime), 1)
+    d["_stale"] = d["_age"] > STALE_AFTER
+    return d
 
 
 @app.get("/api/live")

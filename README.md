@@ -108,7 +108,49 @@ app/
 data/               banco, capturas anotadas e calibração (volume)
 ```
 
-API: `/api/live` (SSE), `/live.mjpg` (vídeo), `/api/cemaden` e `/api/cemaden/series?hours=24`, `/api/latest`, `/api/readings?hours=24[&points=360]`, `/api/alerts`, `/api/config`, `/snap/latest.jpg`.
+API: `/api/live.json` (leitura ao vivo, usada pelo painel), `/snap/latest.jpg` (último quadro), `/api/live` (SSE) e `/live.mjpg` (vídeo contínuo, para uso externo), `/api/cemaden`, `/api/cemaden/series?hours=24` e `/api/cemaden/zones?days=7`, `/api/latest`, `/api/readings?hours=24[&points=360]`, `/api/alerts`, `/api/config`, `/snap/latest.jpg`.
+
+## Painel
+
+Aplicação de uma página (sem dependências externas, funciona offline na rede local) pensada para quem **analisa e precisa entender** os dados. Cabeçalho com a última medição e a **contagem regressiva** da próxima coleta, e cinco seções em pílulas:
+
+- **Dashboard**: a situação em linguagem simples (com "Por que este status?"), quatro indicadores com variação, **como o rio passou o tempo** (rosca por faixa de cota, com a parcela de leituras confiáveis), **horas em cada faixa por dia** (dias com dados parciais sombreados), nível × chuva lado a lado, **radar dos pluviômetros**, câmera, eventos e a confiança em cada fonte.
+- **Rio**: nível medido pela estação do CEMADEN, com as cotas desenhadas como faixas coloridas no gráfico, estatísticas do período e a comparação com a câmera.
+- **Chuva**: chuva por hora, acumulado por pluviômetro (escolha o pluviômetro), previsão e a escala de classificação.
+- **Câmera**: vídeo ao vivo, pessoas e veículos, nível estimado e como ler as marcações da imagem.
+- **Regras e dados**: fonte, frequência e limitação de cada dado, download em CSV, regras do status e glossário.
+
+O painel **não mantém conexões permanentes**: dados e vídeo vêm de requisições curtas (cerca de 1 por segundo e 3 quadros por segundo). Navegadores limitam 6 conexões por endereço, e SSE/MJPEG em várias abas travavam tudo.
+
+Cada número técnico tem um botão **?** que explica o termo. Todo gráfico tem a versão em tabela. Tema claro e escuro; estados sempre com ícone e texto, nunca só cor.
+
+A situação ("Situação normal", "Atenção", "Alerta", "Risco de transbordamento", "Nível alto, sem chuva que o explique", "Nível sem confirmação", "Sem dados recentes") vem de regras simples e visíveis em `app/static/js/situation.js`. Em especial: nível em alerta ou transbordamento **sem nenhuma chuva medida em 3 dias** não vira "cheia" nem é descartado, e o painel pede confirmação, porque o sensor da estação às vezes registra eco falso. O painel é apoio à decisão e **não substitui** os avisos da Defesa Civil.
+
+## Estrutura
+
+```
+app/
+  stream.py         acha o .m3u8 (Playwright) e captura frame (ffmpeg)
+  analyze_river.py  nível por cor na régua + checagem por IA
+  analyze_scene.py  YOLO, movimento, tempo (imagem + Open-Meteo)
+  cemaden.py        coleta e filtro dos dados abertos do CEMADEN
+  alerts.py         regras e Telegram
+  db.py             SQLite
+  worker.py         loop ao vivo + gravação do histórico
+  web.py            API + arquivos do painel (static/)
+  calibrate.py      ajuda na calibração
+  static/
+    index.html      estrutura das seções
+    css/app.css     tokens, componentes e layout responsivo
+    js/app.js       dados, rotas e telas
+    js/situation.js regras da situação em linguagem simples
+    js/charts.js    gráficos SVG (linhas, colunas, tabela)
+    js/glossary.js  explicações dos termos
+    js/util.js      DOM, formatação pt-BR, CSV
+data/               banco, capturas anotadas e calibração (volume)
+```
+
+API: `/api/live` (SSE), `/live.mjpg` (vídeo), `/api/cemaden`, `/api/cemaden/series?hours=24` e `/api/cemaden/zones?days=7`, `/api/latest`, `/api/readings?hours=24[&points=360]`, `/api/alerts`, `/api/config`, `/snap/latest.jpg`.
 
 ## Painel
 
@@ -148,7 +190,7 @@ app/
 data/               banco, capturas anotadas e calibração (volume)
 ```
 
-API: `/api/live` (SSE), `/live.mjpg` (vídeo), `/api/cemaden` e `/api/cemaden/series?hours=24`, `/api/latest`, `/api/readings?hours=24[&points=360]`, `/api/alerts`, `/api/config`, `/snap/latest.jpg`.
+API: `/api/live` (SSE), `/live.mjpg` (vídeo), `/api/cemaden`, `/api/cemaden/series?hours=24` e `/api/cemaden/zones?days=7`, `/api/latest`, `/api/readings?hours=24[&points=360]`, `/api/alerts`, `/api/config`, `/snap/latest.jpg`.
 
 ## Painel
 

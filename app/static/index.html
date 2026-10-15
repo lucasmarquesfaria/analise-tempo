@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
-<title>Rio Caratinga · monitor de cheia</title>
+<title>Rio Caratinga · Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232a78d6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 8c2 1.5 3.5 1.5 5.5 0s3.5-1.5 5.5 0 3.5 1.5 5.5 0M2 15c2 1.5 3.5 1.5 5.5 0s3.5-1.5 5.5 0 3.5 1.5 5.5 0'/%3E%3C/svg%3E">
 <script>try{var t=localStorage.getItem('rio-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="stylesheet" href="/static/css/app.css?v={{v}}">
@@ -48,48 +48,35 @@
 
 <a class="skip" href="#main">Pular para o conteúdo</a>
 
-<div class="app">
-
-  <!-- navegação: barra lateral no desktop, barra inferior no celular -->
-  <aside class="side">
-    <div class="brand">
-      <div class="brand-ico"><svg class="i"><use href="#i-waves"/></svg></div>
-      <div><b>Rio Caratinga</b><span>Monitor de cheia</span></div>
+<div class="page">
+  <header class="top">
+    <div class="top-l">
+      <h1 id="page-title" tabindex="-1">Rio <span class="hl">Caratinga</span> · <span id="h1-view">Dashboard</span></h1>
+      <p class="meta" id="meta-1">Monitor de cheia do Rio Caratinga</p>
+      <p class="meta" id="meta-2"></p>
+      <p class="meta" id="meta-3"></p>
     </div>
-    <nav class="nav" aria-label="Seções do painel">
-      <a href="#/visao-geral" data-view="overview"><svg class="i"><use href="#i-home"/></svg><span><span class="l-full">Visão geral</span><span class="l-short">Início</span></span></a>
-      <a href="#/rio" data-view="rio"><svg class="i"><use href="#i-waves"/></svg><span>Rio</span></a>
-      <a href="#/chuva" data-view="chuva"><svg class="i"><use href="#i-rain"/></svg><span>Chuva</span></a>
-      <a href="#/camera" data-view="camera"><svg class="i"><use href="#i-camera"/></svg><span>Câmera</span></a>
-      <a href="#/dados" data-view="dados"><svg class="i"><use href="#i-book"/></svg><span><span class="l-full">Dados e ajuda</span><span class="l-short">Dados</span></span></a>
-    </nav>
-    <div class="side-foot">
-      <p>Fontes: CEMADEN (nível e chuva), câmera da CDL Caratinga e Open-Meteo (previsão).</p>
-      <p>Apoio à decisão. Não substitui os avisos oficiais da Defesa Civil.</p>
-    </div>
-  </aside>
-
-  <div class="main-col">
-    <header class="bar">
-      <div class="bar-brand"><div class="brand-ico"><svg class="i"><use href="#i-waves"/></svg></div><span>Rio Caratinga</span></div>
-      <span class="bar-title" id="bar-title"></span>
-      <div class="bar-right">
-        <span id="fresh" class="chip"><svg class="i sm"><use href="#i-clock"/></svg><span>—</span></span>
+    <div class="top-r">
+      <nav class="pills" aria-label="Seções do painel">
+        <a href="#/visao-geral" data-view="overview">Dashboard</a>
+        <a href="#/rio" data-view="rio">Rio</a>
+        <a href="#/chuva" data-view="chuva">Chuva</a>
+        <a href="#/camera" data-view="camera">Câmera</a>
+        <a href="#/dados" data-view="dados">Regras e dados</a>
+      </nav>
+      <div class="tools">
         <span id="live-pill" class="badge" data-tone="" role="status" aria-live="polite"><span class="dot"></span><span><span class="hide-s">Câmera </span><span id="live-text">conectando</span></span></span>
         <button id="help-btn" class="icon-btn" type="button" aria-label="Ajuda: como ler este painel" title="Como ler este painel"><svg class="i"><use href="#i-info"/></svg></button>
         <button id="theme" class="icon-btn" type="button" aria-label="Alternar tema claro e escuro" title="Alternar tema"><svg class="i"><use id="theme-ico" href="#i-moon"/></svg></button>
       </div>
-    </header>
+    </div>
+  </header>
 
-    <main id="main" tabindex="-1">
-      <div id="api-error" class="banner-err" hidden><svg class="i"><use href="#i-alert"/></svg><span>Não foi possível atualizar os dados agora. Mostrando as últimas informações recebidas.</span></div>
+  <main id="main" tabindex="-1">
+      <div id="api-error" class="banner-err" hidden><svg class="i"><use href="#i-alert"/></svg><span>Não foi possível atualizar os dados agora (o servidor não respondeu a tempo). Mostrando as últimas informações recebidas; o painel tenta de novo sozinho.</span></div>
 
-      <!-- ═════════ VISÃO GERAL ═════════ -->
-      <section class="view" id="v-overview" aria-labelledby="h-overview" data-title="Visão geral">
-        <div class="view-head">
-          <h1 id="h-overview" tabindex="-1">Visão geral</h1>
-          <p>O que está acontecendo com o rio agora, em linguagem simples, e o quanto você pode confiar nos números.</p>
-        </div>
+      <!-- ═════════ DASHBOARD ═════════ -->
+      <section class="view" id="v-overview" aria-label="Dashboard" data-title="Dashboard">
 
         <article id="sit" class="sit" data-tone="" aria-live="polite">
           <div class="sit-ico"><svg class="i lg"><use id="sit-ico" href="#i-info"/></svg></div>
@@ -106,62 +93,101 @@
         </article>
 
         <section class="kpis" aria-label="Indicadores principais">
-          <article class="card kpi wide">
-            <p class="eyebrow">Nível do rio<button class="term" type="button" data-term="nivel" aria-label="O que é o nível do rio?">?</button></p>
+          <article class="card kpi">
+            <p class="k-label">Nível do rio<button class="term" type="button" data-term="nivel" aria-label="O que é o nível do rio?">?</button></p>
             <p class="big" id="k-level-val">—</p>
-            <p id="k-level-badge"></p>
+            <p id="k-level-badge" class="k-badge"></p>
             <p class="sub" id="k-level-sub"></p>
             <div id="k-level-zones"></div>
             <p class="foot" id="k-level-foot"></p>
           </article>
           <article class="card kpi">
-            <p class="eyebrow">Chuva medida · 24 h<button class="term" type="button" data-term="pluviometro" aria-label="O que é o pluviômetro?">?</button></p>
+            <p class="k-label">Chuva medida (24 h)<button class="term" type="button" data-term="pluviometro" aria-label="O que é o pluviômetro?">?</button></p>
             <p class="big" id="k-rain-val">—</p>
-            <p id="k-rain-badge"></p>
+            <p id="k-rain-badge" class="k-badge"></p>
             <p class="sub" id="k-rain-sub"></p>
+            <p class="foot" id="k-rain-foot"></p>
           </article>
           <article class="card kpi">
-            <p class="eyebrow">Previsão · 6 h<button class="term" type="button" data-term="previsao" aria-label="O que é a previsão?">?</button></p>
+            <p class="k-label">Previsão (6 h)<button class="term" type="button" data-term="previsao" aria-label="O que é a previsão?">?</button></p>
             <p class="big" id="k-fc-val">—</p>
             <p class="sub" id="k-fc-sub"></p>
             <p class="foot">Estimativa de modelo (Open-Meteo)</p>
           </article>
-          <article class="card kpi wide">
-            <p class="eyebrow">Câmera</p>
-            <p id="k-cam-badge"></p>
+          <article class="card kpi">
+            <p class="k-label">Câmera</p>
+            <p class="big" id="k-cam-big">—</p>
+            <p id="k-cam-badge" class="k-badge"></p>
             <p class="sub" id="k-cam-sub"></p>
             <p class="foot" id="k-cam-foot"></p>
           </article>
         </section>
 
-        <section class="grid-2">
-          <article class="card card-pad">
-            <div class="card-h">
-              <div>
-                <h2>Nível e chuva, lado a lado</h2>
-                <p>Últimas 24 horas. Passe o mouse para ver os dois ao mesmo tempo e conferir se o rio reage à chuva.</p>
-              </div>
+        <section class="row r-a">
+          <article class="card pad zn-card">
+            <h2 class="c-title">Como o rio passou o tempo</h2>
+            <p class="c-sub" id="zn-sub">Tempo em cada faixa de cota, pelas leituras da estação.</p>
+            <div class="zn-wrap">
+              <div class="donut" id="zn-donut"></div>
+              <table class="zn-legend" aria-label="Tempo em cada faixa">
+                <tbody id="zn-legend"></tbody>
+              </table>
             </div>
-            <div class="chart sm" id="ov-lv"></div>
-            <div class="chart sm" id="ov-rn"></div>
-            <p class="fine" style="margin-top:6px"><a class="link" href="#/rio">Ver análise completa do nível</a></p>
+            <p class="note-s" id="zn-note"></p>
           </article>
 
-          <div class="stack">
-            <article class="card card-pad">
-              <div class="card-h"><div><h2>Câmera ao vivo</h2><p>Imagem com a régua de medição e as detecções desenhadas.</p></div></div>
-              <div id="slot-overview"></div>
-            </article>
-            <article class="card card-pad">
-              <div class="card-h"><div><h2>Eventos recentes</h2><p id="ov-events-sub">Alertas gerados pelo painel.</p></div></div>
-              <div id="ov-events"></div>
-            </article>
-          </div>
+          <article class="card pad">
+            <div class="c-head">
+              <div>
+                <h2 class="c-title">Horas em cada faixa, por dia<button class="term" type="button" data-term="oscilacao" aria-label="O que é sensor instável?">?</button></h2>
+                <p class="c-sub">Cada coluna é um dia (24 h), horário de Brasília, empilhada por faixa.</p>
+              </div>
+              <select id="zn-days" class="select inline" aria-label="Quantidade de dias">
+                <option value="3">3 dias</option><option value="7" selected>7 dias</option><option value="14">14 dias</option>
+              </select>
+            </div>
+            <div class="legend" id="zn-leg"></div>
+            <div class="chart" id="zn-bars"></div>
+            <p class="note-s" id="zn-bars-note"></p>
+            <details class="tbl-d"><summary>Ver tabela</summary>
+              <div class="scroll-x"><table class="data" id="zn-table"></table></div>
+            </details>
+          </article>
         </section>
 
-        <article class="card card-pad">
-          <div class="card-h">
-            <div><h2>Confiança nos dados</h2><p>Estado de cada fonte agora. Fonte instável ou sem sinal reduz o que o painel consegue afirmar.</p></div>
+        <section class="row r-b">
+          <article class="card pad">
+            <h2 class="c-title">Nível e chuva, lado a lado</h2>
+            <p class="c-sub">Últimas 24 horas. Passe o mouse para ver os dois ao mesmo tempo e conferir se o rio reage à chuva.</p>
+            <div class="chart md" id="ov-lv"></div>
+            <div class="chart md" id="ov-rn"></div>
+            <p class="fine" style="margin-top:6px"><a class="link" href="#/rio">Ver análise completa do nível</a></p>
+          </article>
+          <article class="card pad">
+            <h2 class="c-title">Radar dos pluviômetros<button class="term" type="button" data-term="pluviometro" aria-label="O que é o pluviômetro?">?</button></h2>
+            <p class="c-sub">Onde cada estação do CEMADEN fica em relação à câmera (norte para cima) e quanto choveu em 24 h.</p>
+            <div class="radar" id="radar"></div>
+            <p class="note-s" id="radar-note"></p>
+          </article>
+        </section>
+
+        <section class="row r-c">
+          <article class="card pad">
+            <h2 class="c-title">Câmera ao vivo</h2>
+            <p class="c-sub">Imagem com a régua de medição e as detecções desenhadas.</p>
+            <div id="slot-overview"></div>
+          </article>
+          <article class="card pad">
+            <h2 class="c-title">Eventos recentes</h2>
+            <p class="c-sub" id="ov-events-sub">Alertas gerados pelo painel.</p>
+            <div id="ov-events"></div>
+          </article>
+        </section>
+
+        <article class="card pad">
+          <div class="c-head">
+            <div><h2 class="c-title">Confiança nos dados</h2>
+              <p class="c-sub">Estado de cada fonte agora. Fonte instável ou sem sinal reduz o que o painel consegue afirmar.</p></div>
             <a class="link" href="#/dados">Detalhes</a>
           </div>
           <div class="srcs" id="ov-srcs"></div>
@@ -169,11 +195,8 @@
       </section>
 
       <!-- ═════════ RIO ═════════ -->
-      <section class="view" id="v-rio" aria-labelledby="h-rio" data-title="Rio" hidden>
-        <div class="view-head">
-          <h1 id="h-rio" tabindex="-1">Nível do rio</h1>
-          <p>Medição oficial da estação do CEMADEN, comparada às cotas de atenção, alerta e transbordamento.</p>
-        </div>
+      <section class="view" id="v-rio" aria-label="Rio" data-title="Rio" hidden>
+        <p class="lead">Medição oficial da estação do CEMADEN, comparada às cotas de atenção, alerta e transbordamento.</p>
 
         <div class="filters">
           <div class="filters-l"><span class="eyebrow">Período</span>
@@ -223,11 +246,8 @@
       </section>
 
       <!-- ═════════ CHUVA ═════════ -->
-      <section class="view" id="v-chuva" aria-labelledby="h-chuva" data-title="Chuva" hidden>
-        <div class="view-head">
-          <h1 id="h-chuva" tabindex="-1">Chuva</h1>
-          <p>Chuva medida pelos pluviômetros oficiais do CEMADEN perto da câmera e previsão das próximas horas.</p>
-        </div>
+      <section class="view" id="v-chuva" aria-label="Chuva" data-title="Chuva" hidden>
+        <p class="lead">Chuva medida pelos pluviômetros oficiais do CEMADEN perto da câmera e previsão das próximas horas.</p>
 
         <div class="filters">
           <div class="filters-l">
@@ -286,11 +306,8 @@
       </section>
 
       <!-- ═════════ CÂMERA ═════════ -->
-      <section class="view" id="v-camera" aria-labelledby="h-camera" data-title="Câmera" hidden>
-        <div class="view-head">
-          <h1 id="h-camera" tabindex="-1">Câmera</h1>
-          <p>Imagem ao vivo do rio com a análise automática: nível pela régua, pessoas e veículos.</p>
-        </div>
+      <section class="view" id="v-camera" aria-label="Câmera" data-title="Câmera" hidden>
+        <p class="lead">Imagem ao vivo do rio com a análise automática: nível pela régua, pessoas e veículos.</p>
 
         <section class="grid-2">
           <div id="slot-camera"></div>
@@ -347,11 +364,8 @@
       </section>
 
       <!-- ═════════ DADOS E AJUDA ═════════ -->
-      <section class="view" id="v-dados" aria-labelledby="h-dados" data-title="Dados e ajuda" hidden>
-        <div class="view-head">
-          <h1 id="h-dados" tabindex="-1">Dados e ajuda</h1>
-          <p>De onde vêm os números, quando foram atualizados, como o status é calculado e o que cada termo significa.</p>
-        </div>
+      <section class="view" id="v-dados" aria-label="Regras e dados" data-title="Regras e dados" hidden>
+        <p class="lead">De onde vêm os números, quando foram atualizados, como o status é calculado e o que cada termo significa.</p>
 
         <article class="card card-pad">
           <div class="card-h"><div><h2>Fontes de dados</h2><p>Cada fonte tem frequência e limitações próprias.</p></div></div>
@@ -373,8 +387,9 @@
           <ol class="rules">
             <li><b class="n">1</b><span><b>Nível pela estação do CEMADEN.</b> A mediana da última hora é comparada às cotas de atenção, alerta e transbordamento da própria estação.</span></li>
             <li><b class="n">2</b><span><b>Sensor oscilando.</b> Se as leituras da última hora variarem mais de 0,5 m, o nível não é classificado e o estado vira "Nível sem confirmação".</span></li>
-            <li><b class="n">3</b><span><b>Chuva forte.</b> Com o sensor instável, chuva forte (30 mm em 24 h, 10 mm em 1 h, ou 30 mm previstos) eleva o estado para "Atenção".</span></li>
-            <li><b class="n">4</b><span><b>Câmera e alertas.</b> Entram no texto de apoio, mas não mudam o estado sozinhos.</span></li>
+            <li><b class="n">3</b><span><b>Nível alto sem chuva.</b> Se o nível estiver em alerta ou transbordamento, mas não houver chuva medida nas últimas 72 h, o estado vira "Nível alto, sem chuva que o explique" (âmbar): pode ser erro do sensor ou chuva fora da área dos pluviômetros, então o painel pede confirmação em vez de afirmar cheia ou de descartar o risco.</span></li>
+            <li><b class="n">4</b><span><b>Chuva forte.</b> Com o sensor instável, chuva forte (30 mm em 24 h, 10 mm em 1 h, ou 30 mm previstos) eleva o estado para "Atenção".</span></li>
+            <li><b class="n">5</b><span><b>Câmera e alertas.</b> Entram no texto de apoio, mas não mudam o estado sozinhos.</span></li>
           </ol>
         </article>
 
@@ -391,8 +406,7 @@
     <footer class="foot">
       <span>Imagem: câmera da CDL Caratinga · nível e chuva medidos: CEMADEN · previsão: Open-Meteo.</span>
       <span>Os dados do CEMADEN chegam com 10 a 30 minutos de atraso. Horários no fuso de Brasília.</span>
-    </footer>
-  </div>
+  </footer>
 </div>
 
 <dialog id="help" class="help" aria-labelledby="help-t">
@@ -404,6 +418,8 @@
   <div class="help-f"><a class="link" href="#/dados" id="help-more">Ver o glossário completo</a></div>
 </dialog>
 
+<!-- versão em cada módulo: o navegador nunca mistura um arquivo novo com outro antigo em cache -->
+<script type="importmap">{"imports":{"/static/js/util.js":"/static/js/util.js?v={{v}}","/static/js/charts.js":"/static/js/charts.js?v={{v}}","/static/js/situation.js":"/static/js/situation.js?v={{v}}","/static/js/glossary.js":"/static/js/glossary.js?v={{v}}"}}</script>
 <script type="module" src="/static/js/app.js?v={{v}}"></script>
 </body>
 </html>
